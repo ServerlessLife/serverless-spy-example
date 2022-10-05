@@ -1,17 +1,73 @@
-import * as cdk from 'aws-cdk-lib';
-import { Template, Match } from 'aws-cdk-lib/assertions';
-import * as ServerlessSpyExample from '../lib/serverless-spy-example-stack';
+import { v4 as uuidv4 } from "uuid";
+import { TestData } from "./TestData";
+import * as fs from "fs";
+import * as path from "path";
+import {
+  ServerlessSpyListener,
+  createServerlessSpyListener,
+} from "serverless-spy";
+import { ServerlessSpyEvents } from "../serverlessSpyEvents/ServerlessSpyEvents";
+import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 
-test('SQS Queue and SNS Topic Created', () => {
-  const app = new cdk.App();
-  // WHEN
-  const stack = new ServerlessSpyExample.ServerlessSpyExampleStack(app, 'MyTestStack');
-  // THEN
+jest.setTimeout(30000);
 
-  const template = Template.fromStack(stack);
+describe("Integration tests", () => {
+  const exportLocation = path.join(__dirname, "../cdkOutput.json");
+  let serverlessSpyListener: ServerlessSpyListener<ServerlessSpyEvents>;
 
-  template.hasResourceProperties('AWS::SQS::Queue', {
-    VisibilityTimeout: 300
+  if (!fs.existsSync(exportLocation)) {
+    throw new Error(`File ${exportLocation} does not exists.`);
+  }
+  const output = JSON.parse(fs.readFileSync(exportLocation).toString())[
+    "ServerlessSpyExampleStack"
+  ];
+
+  beforeEach(async () => {
+    serverlessSpyListener =
+      await createServerlessSpyListener<ServerlessSpyEvents>({
+        serverlessSpyWsUrl: output.ServerlessSpyWsUrl,
+      });
   });
-  template.resourceCountIs('AWS::SNS::Topic', 1);
+
+  afterEach(async () => {
+    serverlessSpyListener.stop();
+  });
+
+  test("Basic test", async () => {
+    const lambdaClient = new LambdaClient({});
+
+    const id = uuidv4();
+    const data = <TestData>{
+      id,
+      message: "Hello",
+    };
+
+    const command = new InvokeCommand({
+      FunctionName: output.FunctionNameMyLambda,
+      InvocationType: "RequestResponse",
+      LogType: "Tail",
+      Payload: JSON.stringify(data) as any,
+    });
+
+    await lambdaClient.send(command);
+
+    (
+      await (
+        await serverlessSpyListener.waitForFunctionMyLambdaRequest<TestData>({
+          condition: (d) => d.request.id === id,
+        })
+      )
+        .toMatchObject({ request: data })
+        .followedByResponse({})
+    ).toMatchObject({ response: data });
+
+    (
+      await serverlessSpyListener.waitForDynamoDBMyTable<TestData>({
+        condition: (d) => d.keys.pk === id,
+      })
+    ).toMatchObject({
+      eventName: "INSERT",
+      newImage: data,
+    });
+  });
 });
