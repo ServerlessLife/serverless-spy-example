@@ -15,15 +15,17 @@ export class ServerlessSpyExampleStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
     });
 
-    const func = new NodejsFunction(this, "MyLambda", {
+    const func = new lambda.Function(this, "MyLambda", {
       memorySize: 512,
       timeout: Duration.seconds(5),
       runtime: lambda.Runtime.NODEJS_18_X,
-      handler: "handler",
-      entry: path.join(__dirname, "../functions/toDynamoDb.ts"),
+      code: lambda.Code.fromAsset(path.join(__dirname, "../dist/functions")),
+      handler: "index.handler",
+      //entry: path.join(__dirname, "../functions/toDynamoDb.mjs"),
       environment: {
         DYNAMODB_TABLE_NAME: dynamoDb.tableName,
         NODE_OPTIONS: "--enable-source-maps",
+        SSPY_DEBUG: "true",
       },
     });
     dynamoDb.grantWriteData(func);
